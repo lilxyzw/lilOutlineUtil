@@ -383,7 +383,7 @@ namespace lilOutlineUtil
         private static void BakeNormalAverage(ref Color[] colors, Mesh sharedMesh, int mi, Texture2D widthMask, Texture2D normalMask, bool useNormalMask)
         {
             var normalAverages = NormalGatherer.GetNormalAverages(sharedMesh, meshSettings[mi].distanceThreshold);
-            int[] sharedIndices = sharedMesh.GetIndices(mi);
+            int[] sharedIndices = GetOptIndices(sharedMesh, mi);
             string message = "Run bake in " + meshSettings[mi].name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
@@ -423,7 +423,7 @@ namespace lilOutlineUtil
                 return;
             }
             var normalOriginal = NormalGatherer.GetNormalAveragesFast(meshSettings[mi].mesh);
-            int[] sharedIndices = sharedMesh.GetIndices(mi);
+            int[] sharedIndices = GetOptIndices(sharedMesh, mi);
             string message = "Run bake in " + meshSettings[mi].name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
@@ -457,7 +457,7 @@ namespace lilOutlineUtil
 
         private static void BakeNormalMap(ref Color[] colors, Mesh sharedMesh, int mi, Texture2D widthMask)
         {
-            int[] sharedIndices = sharedMesh.GetIndices(mi);
+            int[] sharedIndices = GetOptIndices(sharedMesh, mi);
             string message = "Run bake in " + meshSettings[mi].name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
@@ -482,7 +482,7 @@ namespace lilOutlineUtil
 
         private static void BakeNormalEmpty(ref Color[] colors, Mesh sharedMesh, int mi, Texture2D widthMask)
         {
-            int[] sharedIndices = sharedMesh.GetIndices(mi);
+            int[] sharedIndices = GetOptIndices(sharedMesh, mi);
             string message = "Run bake in " + meshSettings[mi].name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
@@ -505,7 +505,7 @@ namespace lilOutlineUtil
                 BakeNormalEmpty(ref colors, sharedMesh, mi, widthMask);
                 return;
             }
-            int[] sharedIndices = sharedMesh.GetIndices(mi);
+            int[] sharedIndices = GetOptIndices(sharedMesh, mi);
             string message = "Run bake in " + meshSettings[mi].name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
@@ -558,6 +558,11 @@ namespace lilOutlineUtil
         {
             isCancelled = isCancelled || EditorUtility.DisplayCancelableProgressBar(TEXT_WINDOW_NAME, message, progress);
             return isCancelled;
+        }
+
+        public static int[] GetOptIndices(Mesh sharedMesh, int mi)
+        {
+            return sharedMesh.GetIndices(mi).ToList().Distinct().ToArray();
         }
 
         //------------------------------------------------------------------------------------------------------------------------------
