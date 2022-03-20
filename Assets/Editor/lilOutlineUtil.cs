@@ -88,6 +88,13 @@ namespace lilOutlineUtil
             bool isSkinned = skinnedMeshRenderer != null;
             Mesh sharedMesh = isSkinned ? skinnedMeshRenderer?.sharedMesh : meshFilter?.sharedMesh;
             Material[] materials = isSkinned ? skinnedMeshRenderer?.sharedMaterials : meshRenderer?.sharedMaterials;
+            Vector3[] vertices = sharedMesh.vertices;
+            Vector3[] normals = sharedMesh.normals;
+            Vector4[] tangents = sharedMesh.tangents;
+            Color[] colors = sharedMesh.colors;
+            Vector2[] uv = sharedMesh.uv;
+            bool hasColors = colors != null && colors.Length > 2;
+            bool hasUV0 = uv != null || uv.Length > 2;
 
             // Draw error messages
             if(AssetDatabase.Contains(gameObject))
@@ -118,21 +125,21 @@ namespace lilOutlineUtil
                 return;
             }
 
-            if(sharedMesh.vertices == null || sharedMesh.vertices.Length < 2)
+            if(vertices == null || vertices.Length < 2)
             {
                 EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_VERT[lang], MessageType.Error);
                 EditorGUILayout.EndScrollView();
                 return;
             }
 
-            if(sharedMesh.normals == null && sharedMesh.normals.Length < 2)
+            if(normals == null && normals.Length < 2)
             {
                 EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_NORM[lang], MessageType.Error);
                 EditorGUILayout.EndScrollView();
                 return;
             }
 
-            if(sharedMesh.tangents == null && sharedMesh.tangents.Length < 2)
+            if(tangents == null && tangents.Length < 2)
             {
                 EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_TANJ[lang], MessageType.Error);
                 EditorGUILayout.EndScrollView();
@@ -173,7 +180,7 @@ namespace lilOutlineUtil
                         meshSettings[i].name += materials[i].name;
                     }
                 }
-                DrawMeshSettingsGUI(i);
+                DrawMeshSettingsGUI(i, hasColors, hasUV0);
             }
             EditorGUILayout.Space();
 
@@ -242,7 +249,7 @@ namespace lilOutlineUtil
             EditorGUILayout.EndScrollView();
         }
 
-        private static void DrawMeshSettingsGUI(int i)
+        private static void DrawMeshSettingsGUI(int i, bool hasColors, bool hasUV0)
         {
             meshSettings[i].isBakeTarget = EditorGUILayout.ToggleLeft(meshSettings[i].name, meshSettings[i].isBakeTarget);
 
@@ -261,12 +268,17 @@ namespace lilOutlineUtil
                     if(meshSettings[i].bakeMode == BakeMode.NormalMap)
                     {
                         meshSettings[i].normalMap = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_NORMAL_MAP[lang], meshSettings[i].normalMap, typeof(Texture2D), false);
+                        if(!hasUV0) EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_UV[lang], MessageType.Warning);
                     }
                     if(meshSettings[i].bakeMode == BakeMode.OtherMesh)
                     {
                         meshSettings[i].mesh = (Mesh)EditorGUILayout.ObjectField(TEXT_ITEM_REFERENCE_MESH[lang], meshSettings[i].mesh, typeof(Mesh), false);
                         meshSettings[i].shrinkTipStrength = EditorGUILayout.FloatField(TEXT_ITEM_SHRINK_TIP[lang], meshSettings[i].shrinkTipStrength);
                         meshSettings[i].normalMask = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_NORMAL_MASK[lang], meshSettings[i].normalMask, typeof(Texture2D), false);
+                    }
+                    if(meshSettings[i].bakeMode == BakeMode.Keep && !hasColors)
+                    {
+                        EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_COLOR[lang], MessageType.Warning);
                     }
                 EditorGUI.indentLevel--;
 
@@ -275,6 +287,16 @@ namespace lilOutlineUtil
                     if(meshSettings[i].widthBakeMode == WidthBakeMode.Mask)
                     {
                         meshSettings[i].widthMask = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_WIDTH_MASK[lang], meshSettings[i].widthMask, typeof(Texture2D), false);
+                        if(!hasUV0) EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_UV[lang], MessageType.Warning);
+                    }
+                    if((meshSettings[i].widthBakeMode == WidthBakeMode.Red ||
+                        meshSettings[i].widthBakeMode == WidthBakeMode.Green ||
+                        meshSettings[i].widthBakeMode == WidthBakeMode.Blue ||
+                        meshSettings[i].widthBakeMode == WidthBakeMode.Alpha) &&
+                        !hasColors
+                    )
+                    {
+                        EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_COLOR[lang], MessageType.Warning);
                     }
                 EditorGUI.indentLevel--;
                 EditorGUILayout.EndVertical();
@@ -297,12 +319,26 @@ namespace lilOutlineUtil
             Color[] outColors = hasColors ? colors : Enumerable.Repeat(Color.white, vertices.Length).ToArray();
 
             isCancelled = false;
+            System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
+            stopwatch.Start();
             for(int mi = 0; mi < sharedMesh.subMeshCount; mi++)
             {
                 if(!meshSettings[mi].isBakeTarget) continue;
+                FixInvalidSettings(mi, hasColors, hasUV0);
+
+                // Get readable texture
+                Texture2D normalMap = meshSettings[mi].normalMap;
+                if(meshSettings[mi].bakeMode == BakeMode.NormalMap)
+                {
+                    GetReadableTexture(ref normalMap);
+                }
+                else
+                {
+                    normalMap = null;
+                }
 
                 Texture2D widthMask = meshSettings[mi].widthMask;
-                if(widthMask != null && hasUV0 && meshSettings[mi].widthBakeMode == WidthBakeMode.Mask)
+                if(meshSettings[mi].widthBakeMode == WidthBakeMode.Mask)
                 {
                     GetReadableTexture(ref widthMask);
                 }
@@ -336,7 +372,7 @@ namespace lilOutlineUtil
                         }
                         break;
                     case BakeMode.NormalMap:
-                        BakeNormalMap(ref outColors, sharedIndices, mi, colors, uv, widthMask);
+                        BakeNormalMap(ref outColors, sharedIndices, mi, colors, uv, widthMask, normalMap);
                         break;
                     case BakeMode.OtherMesh:
                         if(normalMask != null)
@@ -355,12 +391,14 @@ namespace lilOutlineUtil
                         BakeNormalKeep(ref outColors, sharedIndices, mi, colors, uv, widthMask);
                         break;
                     default:
-                        BakeNormalKeep(ref outColors, sharedIndices, mi, colors, uv, widthMask);
+                        BakeNormalEmpty(ref outColors, sharedIndices, mi, colors, uv, widthMask);
                         break;
                 }
                 EditorUtility.ClearProgressBar();
                 if(isCancelled) return;
             }
+            stopwatch.Stop();
+            Debug.Log(stopwatch.ElapsedMilliseconds + "ms");
 
             FixIllegalDatas(ref outColors);
             mesh.SetColors(outColors);
@@ -389,14 +427,17 @@ namespace lilOutlineUtil
         // Bake normal to color
         private static void BakeNormalAverage(ref Color[] outColors, int[] sharedIndices, int mi, Vector3[] vertices, Vector3[] normals, Vector4[] tangents, Color[] colors, Vector2[] uv, Texture2D widthMask, Texture2D normalMask, bool useNormalMask)
         {
-            var normalAverages = NormalGatherer.GetNormalAverages(vertices, normals, meshSettings[mi].distanceThreshold);
+            var normalAverages = NormalGatherer.GetNormalAverages(sharedIndices, vertices, normals, meshSettings[mi].distanceThreshold);
             string message = "Run bake in " + meshSettings[mi].name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
                 int index = sharedIndices[i];
                 float width = GetWidth(mi, colors, uv, index, widthMask);
-                if(useNormalMask && !GetNormalMask(uv, index, normalMask))
+                Vector3 normal = normals[index];
+                Vector4 tangent = tangents[index];
+                Vector3 bitangent = Vector3.Cross(normal, tangent) * tangent.w;
+                if(IsIllegalTangent(normal, tangent) || useNormalMask && !GetNormalMask(uv, index, normalMask))
                 {
                     outColors[index] = new Color(
                         0.5f,
@@ -407,9 +448,6 @@ namespace lilOutlineUtil
                     continue;
                 }
                 Vector3 normalAverage = NormalGatherer.GetClosestNormal(normalAverages, vertices[index]);
-                Vector3 normal = normals[index];
-                Vector4 tangent = tangents[index];
-                Vector3 bitangent = Vector3.Cross(normal, tangent) * tangent.w;
                 if(meshSettings[mi].shrinkTipStrength > 0) width *= Mathf.Pow(Mathf.Clamp01(Vector3.Dot(normal,normalAverage)), meshSettings[mi].shrinkTipStrength);
                 outColors[index] = new Color(
                     Vector3.Dot(normalAverage, tangent) * 0.5f + 0.5f,
@@ -423,19 +461,17 @@ namespace lilOutlineUtil
 
         private static void BakeNormalMesh(ref Color[] outColors, int[] sharedIndices, int mi, Vector3[] vertices, Vector3[] normals, Vector4[] tangents, Color[] colors, Vector2[] uv, Texture2D widthMask, Texture2D normalMask, bool useNormalMask)
         {
-            if(meshSettings[mi].mesh == null)
-            {
-                BakeNormalEmpty(ref outColors, sharedIndices, mi, colors, uv, widthMask);
-                return;
-            }
-            var normalOriginal = NormalGatherer.GetNormalAveragesFast(vertices, normals);
+            var normalOriginal = NormalGatherer.GetNormalAveragesFast(sharedIndices, vertices, normals);
             string message = "Run bake in " + meshSettings[mi].name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
                 int index = sharedIndices[i];
                 float width = GetWidth(mi, colors, uv, index, widthMask);
-                if(useNormalMask && !GetNormalMask(uv, index, normalMask))
+                Vector3 normal = normals[index];
+                Vector4 tangent = tangents[index];
+                Vector3 bitangent = Vector3.Cross(normal, tangent) * (tangent.w >= 0 ? 1 : -1);
+                if(IsIllegalTangent(normal, tangent) || useNormalMask && !GetNormalMask(uv, index, normalMask))
                 {
                     outColors[index] = new Color(
                         0.5f,
@@ -446,9 +482,6 @@ namespace lilOutlineUtil
                     continue;
                 }
                 Vector3 normalAverage = NormalGatherer.GetClosestNormal(normalOriginal, vertices[index]);
-                Vector3 normal = normals[index];
-                Vector4 tangent = tangents[index];
-                Vector3 bitangent = Vector3.Cross(normal, tangent) * (tangent.w >= 0 ? 1 : -1);
                 if(meshSettings[mi].shrinkTipStrength > 0) width *= Mathf.Pow(Mathf.Clamp01(Vector3.Dot(normal,normalAverage)), meshSettings[mi].shrinkTipStrength);
                 outColors[index] = new Color(
                     Vector3.Dot(normalAverage, tangent) * 0.5f + 0.5f,
@@ -460,24 +493,18 @@ namespace lilOutlineUtil
             }
         }
 
-        private static void BakeNormalMap(ref Color[] outColors, int[] sharedIndices, int mi, Color[] colors, Vector2[] uv, Texture2D widthMask)
+        private static void BakeNormalMap(ref Color[] outColors, int[] sharedIndices, int mi, Color[] colors, Vector2[] uv, Texture2D widthMask, Texture2D normalMap)
         {
             string message = "Run bake in " + meshSettings[mi].name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
                 int index = sharedIndices[i];
-                Color normalMap = new Color(0.5f, 0.5f, 1.0f);
-                if(uv != null && uv.Length > 2 && meshSettings[mi].widthMask == null)
-                {
-                    Texture2D normalMapTex = meshSettings[mi].normalMap;
-                    GetReadableTexture(ref normalMapTex);
-                    normalMap = normalMapTex.GetPixelBilinear(uv[index].x, uv[index].y);
-                }
+                Color normalMapColor = normalMap.GetPixelBilinear(uv[index].x, uv[index].y);
                 outColors[index] = new Color(
-                    normalMap.r,
-                    normalMap.g,
-                    normalMap.b,
+                    normalMapColor.r,
+                    normalMapColor.g,
+                    normalMapColor.b,
                     GetWidth(mi, colors, uv, index, widthMask)
                 );
                 if(DrawProgress(message, (float)i / (float)sharedIndices.Length)) return;
@@ -503,11 +530,6 @@ namespace lilOutlineUtil
 
         private static void BakeNormalKeep(ref Color[] outColors, int[] sharedIndices, int mi, Color[] colors, Vector2[] uv, Texture2D widthMask)
         {
-            if(colors == null || colors.Length < 2)
-            {
-                BakeNormalEmpty(ref outColors, sharedIndices, mi, colors, uv, widthMask);
-                return;
-            }
             string message = "Run bake in " + meshSettings[mi].name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
@@ -532,16 +554,12 @@ namespace lilOutlineUtil
                     if(widthMask == null) return 1.0f;
                     return widthMask.GetPixelBilinear(uv[index].x, uv[index].y).r;
                 case WidthBakeMode.Red:
-                    if(colors == null || colors.Length < 2) return 1.0f;
                     return colors[index].r;
                 case WidthBakeMode.Green:
-                    if(colors == null || colors.Length < 2) return 1.0f;
                     return colors[index].g;
                 case WidthBakeMode.Blue:
-                    if(colors == null || colors.Length < 2) return 1.0f;
                     return colors[index].b;
                 case WidthBakeMode.Alpha:
-                    if(colors == null || colors.Length < 2) return 1.0f;
                     return colors[index].a;
                 case WidthBakeMode.Empty:
                     return 1.0f;
@@ -552,7 +570,6 @@ namespace lilOutlineUtil
 
         private static bool GetNormalMask(Vector2[] uv, int index, Texture2D normalMask)
         {
-            //if(normalMask == null) return true;
             return normalMask.GetPixelBilinear(uv[index].x, uv[index].y).r > 0.5f;
         }
 
@@ -562,14 +579,19 @@ namespace lilOutlineUtil
             return isCancelled;
         }
 
-        public static int[] GetOptIndices(Mesh mesh, int mi)
+        private static int[] GetOptIndices(Mesh mesh, int mi)
         {
             return mesh.GetIndices(mi).ToList().Distinct().ToArray();
         }
 
+        private static bool IsIllegalTangent(Vector3 normal, Vector4 tangent)
+        {
+            return normal.x == tangent.x && normal.y == tangent.y && normal.z == tangent.z;
+        }
+
         //------------------------------------------------------------------------------------------------------------------------------
         // Utils
-        static void GetReadableTexture(ref Texture2D tex)
+        private static void GetReadableTexture(ref Texture2D tex)
         {
             #if UNITY_2018_3_OR_NEWER
             if(!tex.isReadable)
@@ -623,6 +645,35 @@ namespace lilOutlineUtil
             }
         }
 
+        private static void FixInvalidSettings(int mi, bool hasColors, bool hasUV0)
+        {
+            if(meshSettings[mi].bakeMode == BakeMode.NormalMap && (!hasUV0 || meshSettings[mi].normalMap == null))
+            {
+                meshSettings[mi].bakeMode = BakeMode.Empty;
+            }
+            if(meshSettings[mi].bakeMode == BakeMode.NormalMap && meshSettings[mi].mesh == null)
+            {
+                meshSettings[mi].bakeMode = BakeMode.Empty;
+            }
+            if(meshSettings[mi].bakeMode == BakeMode.Keep && !hasColors)
+            {
+                meshSettings[mi].bakeMode = BakeMode.Empty;
+            }
+            if(meshSettings[mi].widthBakeMode == WidthBakeMode.Mask && (!hasUV0 || meshSettings[mi].widthMask == null))
+            {
+                meshSettings[mi].widthBakeMode = WidthBakeMode.Empty;
+            }
+            if((meshSettings[mi].widthBakeMode == WidthBakeMode.Red ||
+                meshSettings[mi].widthBakeMode == WidthBakeMode.Green ||
+                meshSettings[mi].widthBakeMode == WidthBakeMode.Blue ||
+                meshSettings[mi].widthBakeMode == WidthBakeMode.Alpha) &&
+                !hasColors
+            )
+            {
+                meshSettings[mi].widthBakeMode = WidthBakeMode.Empty;
+            }
+        }
+
         //------------------------------------------------------------------------------------------------------------------------------
         // Languages
         private const string TEXT_WINDOW_NAME = "lilOutlineUtil";
@@ -643,6 +694,8 @@ namespace lilOutlineUtil
         private static readonly string[] TEXT_WARN_MESH_HAS_NO_VERT     = new[] {"The selected mesh has no vertices!",  "選択したメッシュは頂点がありません。"};
         private static readonly string[] TEXT_WARN_MESH_HAS_NO_NORM     = new[] {"The selected mesh has no normals!",   "選択したメッシュは法線がありません。"};
         private static readonly string[] TEXT_WARN_MESH_HAS_NO_TANJ     = new[] {"The selected mesh has no tangents!",  "選択したメッシュはタンジェントがありません。"};
+        private static readonly string[] TEXT_WARN_MESH_HAS_NO_UV       = new[] {"The setting is ignored because there is no uv.",              "UVが存在しないため設定が無視されます。"};
+        private static readonly string[] TEXT_WARN_MESH_HAS_NO_COLOR    = new[] {"The setting is ignored because there is no vertex color.",    "頂点カラーが存在しないため設定が無視されます。"};
         private static readonly string[] TEXT_WARN_MESH_NOT_SAVED       = new[] {"Generated mesh is not saved!",        "生成されたメッシュが保存されていません。"};
 
         private static readonly string[] TEXT_ITEM_DD_MESH              = new[] {"Mesh (D&D from scene)",   "メッシュ (シーンからD&D)"};
@@ -670,20 +723,21 @@ namespace lilOutlineUtil
 
     public class NormalGatherer
     {
-        public static Dictionary<Vector3, Vector3> GetNormalAveragesFast(Vector3[] vertices, Vector3[] normals)
+        public static Dictionary<Vector3, Vector3> GetNormalAveragesFast(int[] sharedIndices, Vector3[] vertices, Vector3[] normals)
         {
             var normalAverages = new Dictionary<Vector3, Vector3>();
             string message = "Generating averages";
 
-            for(int i = 0; i < vertices.Length; i++)
+            for(int i = 0; i < sharedIndices.Length; i++)
             {
-                Vector3 pos = vertices[i];
+                int index = sharedIndices[i];
+                Vector3 pos = vertices[index];
                 if(!normalAverages.ContainsKey(pos))
                 {
-                    normalAverages[pos] = normals[i];
+                    normalAverages[pos] = normals[index];
                     continue;
                 }
-                normalAverages[pos] += normals[i];
+                normalAverages[pos] += normals[index];
                 if(OutlineUtilWindow.DrawProgress(message, (float)i / (float)vertices.Length)) return normalAverages;
             }
 
@@ -696,15 +750,16 @@ namespace lilOutlineUtil
             return normalAverages;
         }
 
-        public static Dictionary<Vector3, Vector3> GetNormalAverages(Vector3[] vertices, Vector3[] normals, float threshold)
+        public static Dictionary<Vector3, Vector3> GetNormalAverages(int[] sharedIndices, Vector3[] vertices, Vector3[] normals, float threshold)
         {
-            if(threshold == 0.0f) return GetNormalAveragesFast(vertices, normals);
+            if(threshold == 0.0f) return GetNormalAveragesFast(sharedIndices, vertices, normals);
             var normalAverages = new Dictionary<Vector3, Vector3>();
             string message = "Generating averages";
 
-            for(int i = 0; i < vertices.Length; i++)
+            for(int i = 0; i < sharedIndices.Length; i++)
             {
-                Vector3 pos = vertices[i];
+                int index = sharedIndices[i];
+                Vector3 pos = vertices[index];
                 if(normalAverages.ContainsKey(pos)) continue;
                 Vector3 average = new Vector3(0,0,0);
                 for(int j = 0; j < vertices.Length; j++)
@@ -712,7 +767,7 @@ namespace lilOutlineUtil
                     average += Vector3.Distance(pos, vertices[j]) < threshold ? normals[j] : Vector3.zero;
                 }
                 normalAverages[pos] = Vector3.Normalize(average);
-                if(OutlineUtilWindow.DrawProgress(message, (float)i / (float)vertices.Length)) return normalAverages;
+                if(OutlineUtilWindow.DrawProgress(message, (float)i / (float)sharedIndices.Length)) return normalAverages;
             }
 
             return normalAverages;
