@@ -316,7 +316,7 @@ namespace lilOutlineUtil
             Vector2[] uv = sharedMesh.uv;
             bool hasColors = colors != null && colors.Length > 2;
             bool hasUV0 = uv != null || uv.Length > 2;
-            Color[] outColors = hasColors ? colors : Enumerable.Repeat(Color.white, vertices.Length).ToArray();
+            Color[] outColors = hasColors ? (Color[])colors.Clone() : Enumerable.Repeat(Color.white, vertices.Length).ToArray();
 
             isCancelled = false;
             System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
@@ -439,23 +439,19 @@ namespace lilOutlineUtil
                 Vector3 bitangent = Vector3.Cross(normal, tangent) * tangent.w;
                 if(IsIllegalTangent(normal, tangent) || useNormalMask && !GetNormalMask(uv, index, normalMask))
                 {
-                    outColors[index] = new Color(
-                        0.5f,
-                        0.5f,
-                        1.0f,
-                        width
-                    );
+                    outColors[index].r = 0.5f;
+                    outColors[index].g = 0.5f;
+                    outColors[index].b = 1.0f;
+                    outColors[index].a = width;
                     continue;
                 }
                 Vector3 normalAverage = NormalGatherer.GetClosestNormal(normalAverages, vertices[index]);
                 if(meshSettings[mi].shrinkTipStrength > 0) width *= Mathf.Pow(Mathf.Clamp01(Vector3.Dot(normal,normalAverage)), meshSettings[mi].shrinkTipStrength);
-                outColors[index] = new Color(
-                    Vector3.Dot(normalAverage, tangent) * 0.5f + 0.5f,
-                    Vector3.Dot(normalAverage, bitangent) * 0.5f + 0.5f,
-                    Vector3.Dot(normalAverage, normal) * 0.5f + 0.5f,
-                    width
-                );
-                if(DrawProgress(message, (float)i / (float)sharedIndices.Length)) return;
+                outColors[index].r = Vector3.Dot(normalAverage, tangent) * 0.5f + 0.5f;
+                outColors[index].g = Vector3.Dot(normalAverage, bitangent) * 0.5f + 0.5f;
+                outColors[index].b = Vector3.Dot(normalAverage, normal) * 0.5f + 0.5f;
+                outColors[index].a = width;
+                if(DrawProgress(message, i, (float)i / (float)sharedIndices.Length)) return;
             }
         }
 
@@ -473,23 +469,19 @@ namespace lilOutlineUtil
                 Vector3 bitangent = Vector3.Cross(normal, tangent) * (tangent.w >= 0 ? 1 : -1);
                 if(IsIllegalTangent(normal, tangent) || useNormalMask && !GetNormalMask(uv, index, normalMask))
                 {
-                    outColors[index] = new Color(
-                        0.5f,
-                        0.5f,
-                        1.0f,
-                        width
-                    );
+                    outColors[index].r = 0.5f;
+                    outColors[index].g = 0.5f;
+                    outColors[index].b = 1.0f;
+                    outColors[index].a = width;
                     continue;
                 }
                 Vector3 normalAverage = NormalGatherer.GetClosestNormal(normalOriginal, vertices[index]);
                 if(meshSettings[mi].shrinkTipStrength > 0) width *= Mathf.Pow(Mathf.Clamp01(Vector3.Dot(normal,normalAverage)), meshSettings[mi].shrinkTipStrength);
-                outColors[index] = new Color(
-                    Vector3.Dot(normalAverage, tangent) * 0.5f + 0.5f,
-                    Vector3.Dot(normalAverage, bitangent) * 0.5f + 0.5f,
-                    Vector3.Dot(normalAverage, normal) * 0.5f + 0.5f,
-                    width
-                );
-                if(DrawProgress(message, (float)i / (float)sharedIndices.Length)) return;
+                outColors[index].r = Vector3.Dot(normalAverage, tangent) * 0.5f + 0.5f;
+                outColors[index].g = Vector3.Dot(normalAverage, bitangent) * 0.5f + 0.5f;
+                outColors[index].b = Vector3.Dot(normalAverage, normal) * 0.5f + 0.5f;
+                outColors[index].a = width;
+                if(DrawProgress(message, i, (float)i / (float)sharedIndices.Length)) return;
             }
         }
 
@@ -501,13 +493,11 @@ namespace lilOutlineUtil
             {
                 int index = sharedIndices[i];
                 Color normalMapColor = normalMap.GetPixelBilinear(uv[index].x, uv[index].y);
-                outColors[index] = new Color(
-                    normalMapColor.r,
-                    normalMapColor.g,
-                    normalMapColor.b,
-                    GetWidth(mi, colors, uv, index, widthMask)
-                );
-                if(DrawProgress(message, (float)i / (float)sharedIndices.Length)) return;
+                outColors[index].r = normalMapColor.r;
+                outColors[index].g = normalMapColor.g;
+                outColors[index].b = normalMapColor.b;
+                outColors[index].a = GetWidth(mi, colors, uv, index, widthMask);
+                if(DrawProgress(message, i, (float)i / (float)sharedIndices.Length)) return;
             }
         }
 
@@ -518,13 +508,11 @@ namespace lilOutlineUtil
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
                 int index = sharedIndices[i];
-                outColors[index] = new Color(
-                    0.5f,
-                    0.5f,
-                    1.0f,
-                    GetWidth(mi, colors, uv, index, widthMask)
-                );
-                if(DrawProgress(message, (float)i / (float)sharedIndices.Length)) return;
+                outColors[index].r = 0.5f;
+                outColors[index].g = 0.5f;
+                outColors[index].b = 1.0f;
+                outColors[index].a = GetWidth(mi, colors, uv, index, widthMask);
+                if(DrawProgress(message, i, (float)i / (float)sharedIndices.Length)) return;
             }
         }
 
@@ -535,14 +523,8 @@ namespace lilOutlineUtil
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
                 int index = sharedIndices[i];
-                Color color = colors[index];
-                outColors[index] = new Color(
-                    color.r,
-                    color.g,
-                    color.b,
-                    GetWidth(mi, colors, uv, index, widthMask)
-                );
-                if(DrawProgress(message, (float)i / (float)sharedIndices.Length)) return;
+                outColors[index].a = GetWidth(mi, colors, uv, index, widthMask);
+                if(DrawProgress(message, i, (float)i / (float)sharedIndices.Length)) return;
             }
         }
 
@@ -573,9 +555,9 @@ namespace lilOutlineUtil
             return normalMask.GetPixelBilinear(uv[index].x, uv[index].y).r > 0.5f;
         }
 
-        public static bool DrawProgress(string message, float progress)
+        public static bool DrawProgress(string message, int i, float progress)
         {
-            isCancelled = isCancelled || EditorUtility.DisplayCancelableProgressBar(TEXT_WINDOW_NAME, message, progress);
+            if((i & 0b11111111) == 0b11111111) return isCancelled = isCancelled || EditorUtility.DisplayCancelableProgressBar(TEXT_WINDOW_NAME, message, progress);
             return isCancelled;
         }
 
@@ -738,7 +720,7 @@ namespace lilOutlineUtil
                     continue;
                 }
                 normalAverages[pos] += normals[index];
-                if(OutlineUtilWindow.DrawProgress(message, (float)i / (float)vertices.Length)) return normalAverages;
+                if(OutlineUtilWindow.DrawProgress(message, i, (float)i / (float)vertices.Length)) return normalAverages;
             }
 
             var keys = normalAverages.Keys.ToArray();
@@ -767,7 +749,7 @@ namespace lilOutlineUtil
                     average += Vector3.Distance(pos, vertices[j]) < threshold ? normals[j] : Vector3.zero;
                 }
                 normalAverages[pos] = Vector3.Normalize(average);
-                if(OutlineUtilWindow.DrawProgress(message, (float)i / (float)sharedIndices.Length)) return normalAverages;
+                if(OutlineUtilWindow.DrawProgress(message, i, (float)i / (float)sharedIndices.Length)) return normalAverages;
             }
 
             return normalAverages;
