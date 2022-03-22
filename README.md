@@ -6,11 +6,12 @@
 1. unitypackageをUnityウィンドウにドラッグ＆ドロップでインポート
 2. マテリアルの輪郭線（アウトライン）の設定で頂点カラーを使うようにする
 3. `Window - _lil - Outline Util`からウィンドウを開く
-4. シーン（Hierarchy）からメッシュをD&D
-5. 編集対象のサブメッシュを選択
+4. シーン（Hierarchy）からアバターをD&D
+5. 編集対象のメッシュを選択
 6. `生成 & テスト`ボタンを押すとメッシュが生成される
 7. `保存`ボタンを押して生成したメッシュを保存
-8. 元のメッシュの`Skinned Mesh Renderer`または`Mesh Filter`に生成したメッシュを割り当てる
+
+生成されたメッシュは元のメッシュ（fbx）と同一階層、もしくはAssets直下のBakedMeshesフォルダに保存されます。既に保存済みである場合は上書きされます。一度保存した後は任意のフォルダに移動できます。SkinnedMeshRendererやMeshFilterのメッシュの参照先が変わった場合は別ファイルとして保存されます。
 
 ### 開発者向け情報
 以下のような関数で頂点カラーからアウトラインの方向・太さをデコードできます。[使用例](https://github.com/lilxyzw/lilOutlineUtil/blob/master/Assets/Shaders/DecodeOutline.shader)
