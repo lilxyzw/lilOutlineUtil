@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 
@@ -11,11 +12,13 @@ namespace lilOutlineUtil
     public class OutlineUtilWindow : EditorWindow
     {
         private static Vector2 scrollPosition = new Vector2(0,0);
-        private static GameObject gameObject;
-        private static MeshSettings[] meshSettings = null;
+        private static GameObject avatar;
+        private static readonly Dictionary<int, MeshSettings[]> meshSettings = new Dictionary<int, MeshSettings[]>(); // <instanceID, <submesh, setting>>
+        private static Dictionary<Mesh, Mesh> bakedMeshes = new Dictionary<Mesh, Mesh>();
         private static int lang = -1;
         private static bool isCancelled = false;
         private static readonly Color emptyColor = new Color(0.5f, 0.5f, 1.0f, 1.0f);
+        private static GUIStyle marginBox;
 
         private enum BakeMode
         {
@@ -40,12 +43,13 @@ namespace lilOutlineUtil
         {
             public string name;
             public bool isBakeTarget;
+            public bool isSkinned;
             public BakeMode bakeMode;
             public WidthBakeMode widthBakeMode;
             public Texture2D normalMap;
             public Texture2D normalMask;
             public Texture2D widthMask;
-            public Mesh mesh;
+            public Mesh referenceMesh;
             public float distanceThreshold;
             public float shrinkTipStrength;
         }
@@ -69,151 +73,64 @@ namespace lilOutlineUtil
                 lang = Application.systemLanguage == SystemLanguage.Japanese ? 1 : 0;
             }
             lang = EditorGUILayout.Popup("Language", lang, TEXT_LANGUAGES);
+            marginBox = new GUIStyle(EditorStyles.helpBox);
+            marginBox.margin.left = 30;
 
             //------------------------------------------------------------------------------------------------------------------------------
             // 1. Select the mesh
-            EditorGUILayout.LabelField(TEXT_STEP_SELECT_MESH[lang], EditorStyles.boldLabel);
-            gameObject = (GameObject)EditorGUILayout.ObjectField(TEXT_ITEM_DD_MESH[lang], gameObject, typeof(GameObject), true);
-            if(gameObject == null)
+            EditorGUILayout.LabelField(TEXT_STEP_SELECT_AVATAR[lang], EditorStyles.boldLabel);
+            avatar = (GameObject)EditorGUILayout.ObjectField(TEXT_ITEM_DD_AVATAR[lang], avatar, typeof(GameObject), true);
+            if(avatar == null)
             {
                 EditorGUILayout.EndScrollView();
                 return;
             }
-            EditorGUILayout.Space();
-
-            // Get mesh data
-            MeshFilter meshFilter = gameObject.GetComponent<MeshFilter>();
-            MeshRenderer meshRenderer = gameObject.GetComponent<MeshRenderer>();
-            SkinnedMeshRenderer skinnedMeshRenderer = gameObject.GetComponent<SkinnedMeshRenderer>();
-            bool isSkinned = skinnedMeshRenderer != null;
-            Mesh sharedMesh = isSkinned ? skinnedMeshRenderer?.sharedMesh : meshFilter?.sharedMesh;
-            Material[] materials = isSkinned ? skinnedMeshRenderer?.sharedMaterials : meshRenderer?.sharedMaterials;
-            Vector3[] vertices = sharedMesh.vertices;
-            Vector3[] normals = sharedMesh.normals;
-            Vector4[] tangents = sharedMesh.tangents;
-            Color[] colors = sharedMesh.colors;
-            Vector2[] uv = sharedMesh.uv;
-            bool hasColors = colors != null && colors.Length > 2;
-            bool hasUV0 = uv != null || uv.Length > 2;
-
-            // Draw error messages
-            if(AssetDatabase.Contains(gameObject))
+            if(AssetDatabase.Contains(avatar))
             {
                 EditorGUILayout.HelpBox(TEXT_WARN_SELECT_FROM_SCENE[lang], MessageType.Error);
                 EditorGUILayout.EndScrollView();
                 return;
             }
-
-            if((meshFilter == null || meshRenderer == null) && skinnedMeshRenderer == null)
-            {
-                EditorGUILayout.HelpBox(TEXT_WARN_OBJ_NOT_HAVE_MESH[lang], MessageType.Error);
-                EditorGUILayout.EndScrollView();
-                return;
-            }
-
-            if(sharedMesh == null)
-            {
-                EditorGUILayout.HelpBox(TEXT_WARN_MESH_IS_EMPTY[lang], MessageType.Error);
-                EditorGUILayout.EndScrollView();
-                return;
-            }
-
-            if(!sharedMesh.isReadable)
-            {
-                EditorGUILayout.HelpBox(TEXT_WARN_MESH_NOT_READABLE[lang], MessageType.Error);
-                EditorGUILayout.EndScrollView();
-                return;
-            }
-
-            if(vertices == null || vertices.Length < 2)
-            {
-                EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_VERT[lang], MessageType.Error);
-                EditorGUILayout.EndScrollView();
-                return;
-            }
-
-            if(normals == null && normals.Length < 2)
-            {
-                EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_NORM[lang], MessageType.Error);
-                EditorGUILayout.EndScrollView();
-                return;
-            }
-
-            if(tangents == null && tangents.Length < 2)
-            {
-                EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_TANJ[lang], MessageType.Error);
-                EditorGUILayout.EndScrollView();
-                return;
-            }
+            EditorGUILayout.Space();
 
             //------------------------------------------------------------------------------------------------------------------------------
             // 2. Select the modify target
             EditorGUILayout.LabelField(TEXT_STEP_SELECT_SUBMESH[lang], EditorStyles.boldLabel);
-            if(meshSettings == null || meshSettings.Length != sharedMesh.subMeshCount)
-            {
-                meshSettings = new MeshSettings[sharedMesh.subMeshCount];
-                for(int i = 0; i < sharedMesh.subMeshCount; i++)
-                {
-                    meshSettings[i] = new MeshSettings
-                    {
-                        name = null,
-                        isBakeTarget = false,
-                        bakeMode = BakeMode.Average,
-                        widthBakeMode = WidthBakeMode.Empty,
-                        normalMap = null,
-                        normalMask = null,
-                        widthMask = null,
-                        mesh = null,
-                        distanceThreshold = 0.0f,
-                        shrinkTipStrength = 0.0f
-                    };
-                }
-            }
-
-            for(int i = 0; i < sharedMesh.subMeshCount; i++)
-            {
-                if(string.IsNullOrEmpty(meshSettings[i].name))
-                {
-                    meshSettings[i].name = i + ": ";
-                    if(i < materials.Length && materials[i] != null && !string.IsNullOrEmpty(materials[i].name))
-                    {
-                        meshSettings[i].name += materials[i].name;
-                    }
-                }
-                DrawMeshSettingsGUI(i, hasColors, hasUV0);
-            }
+            Component[] skinnedMeshRenderers = avatar.GetComponentsInChildren(typeof(SkinnedMeshRenderer), true);
+            Component[] meshRenderers = avatar.GetComponentsInChildren(typeof(MeshRenderer), true);
+            DrawModifyTargetsGUI(skinnedMeshRenderers, meshRenderers);
             EditorGUILayout.Space();
 
             //------------------------------------------------------------------------------------------------------------------------------
             // 3. Generate the mesh, test it, then save
+            GameObject bakedAvatar = FindBakedAvatar();
+
             EditorGUILayout.LabelField(TEXT_STEP_GENERATE_AND_SAVE[lang], EditorStyles.boldLabel);
             EditorGUILayout.BeginHorizontal();
             if(GUILayout.Button(TEXT_BUTTON_GENERATE_AND_TEST[lang]))
             {
-                BakeVertexColors(sharedMesh, isSkinned);
-                if(!isCancelled) EditorUtility.DisplayDialog(TEXT_WINDOW_NAME, "Complete!", "OK");
+                GenerateMeshes(bakedAvatar, skinnedMeshRenderers, meshRenderers);
             }
 
-            GameObject bakedObject = FindBakedObject();
-            if(bakedObject == null)
+            if(bakedAvatar == null)
             {
                 EditorGUILayout.EndHorizontal();
                 EditorGUILayout.EndScrollView();
                 return;
             }
 
-            MeshFilter bakedMeshFilter = bakedObject.GetComponent<MeshFilter>();
-            SkinnedMeshRenderer bakedSkinnedMeshRenderer = bakedObject.GetComponent<SkinnedMeshRenderer>();
-            Mesh bakedMesh = isSkinned ? bakedSkinnedMeshRenderer?.sharedMesh : bakedMeshFilter?.sharedMesh;
-            if(bakedMesh == null)
+            // Save
+            bakedMeshes = new Dictionary<Mesh, Mesh>();
+            GetBakedMeshes(bakedAvatar, skinnedMeshRenderers, meshRenderers);
+            bool isSaved = true;
+            foreach(Mesh bakedMesh in bakedMeshes.Values)
             {
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.EndScrollView();
-                return;
+                if(!isSaved) break;
+                if(bakedMesh == null) continue;
+                isSaved = AssetDatabase.Contains(bakedMesh);
             }
 
             GUIStyle saveButton = new GUIStyle(GUI.skin.button);
-            bool isSaved = AssetDatabase.Contains(bakedMesh);
             if(!isSaved)
             {
                 saveButton.normal.textColor = Color.red;
@@ -222,22 +139,7 @@ namespace lilOutlineUtil
 
             if(GUILayout.Button(TEXT_BUTTON_SAVE[lang], saveButton))
             {
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.EndScrollView();
-
-                string path = "Assets/";
-                if(isSaved)
-                {
-                    path = AssetDatabase.GetAssetPath(bakedMesh);
-                    if(string.IsNullOrEmpty(path)) path = "Assets/";
-                    else path = Path.GetDirectoryName(path);
-                }
-                path = EditorUtility.SaveFilePanel(TEXT_BUTTON_SAVE[lang], path, bakedMesh.name, "asset");
-                if(!string.IsNullOrEmpty(path))
-                {
-                    AssetDatabase.CreateAsset(bakedMesh, FileUtil.GetProjectRelativePath(path));
-                }
-                return;
+                SaveMeshes();
             }
             EditorGUILayout.EndHorizontal();
 
@@ -249,50 +151,162 @@ namespace lilOutlineUtil
             EditorGUILayout.EndScrollView();
         }
 
-        private static void DrawMeshSettingsGUI(int i, bool hasColors, bool hasUV0)
+        //------------------------------------------------------------------------------------------------------------------------------
+        // 2. Select the modify target
+        private static void DrawModifyTargetsGUI(Component[] skinnedMeshRenderers, Component[] meshRenderers)
         {
-            meshSettings[i].isBakeTarget = EditorGUILayout.ToggleLeft(meshSettings[i].name, meshSettings[i].isBakeTarget);
-
-            if(meshSettings[i].isBakeTarget)
+            foreach(SkinnedMeshRenderer skinnedMeshRenderer in skinnedMeshRenderers)
             {
+                EditorGUILayout.LabelField(skinnedMeshRenderer.gameObject.name, EditorStyles.boldLabel);
+                int id = skinnedMeshRenderer.gameObject.GetInstanceID();
+                Mesh sharedMesh = skinnedMeshRenderer.sharedMesh;
+                Material[] materials = skinnedMeshRenderer.sharedMaterials;
                 EditorGUI.indentLevel++;
-                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                meshSettings[i].bakeMode = (BakeMode)EditorGUILayout.Popup(TEXT_ITEM_NORMAL_BAKE_MODE[lang], (int)meshSettings[i].bakeMode, TEXT_LABELS_NORMAL_BAKE_MODE[lang]);
+                DrawGUIPerComponent(id, sharedMesh, materials);
+                EditorGUI.indentLevel--;
+            }
+
+            foreach(MeshRenderer meshRenderer in meshRenderers)
+            {
+                MeshFilter meshFilter = meshRenderer.gameObject.GetComponent<MeshFilter>();
+                if(meshFilter == null)
+                {
+                    continue;
+                }
+                EditorGUILayout.LabelField(meshRenderer.gameObject.name, EditorStyles.boldLabel);
+                int id = meshRenderer.gameObject.GetInstanceID();
+                Mesh sharedMesh = meshFilter.sharedMesh;
+                Material[] materials = meshRenderer.sharedMaterials;
                 EditorGUI.indentLevel++;
-                    if(meshSettings[i].bakeMode == BakeMode.Average)
+                DrawGUIPerComponent(id, sharedMesh, materials);
+                EditorGUI.indentLevel--;
+            }
+        }
+
+        private static void DrawGUIPerComponent(int id, Mesh sharedMesh, Material[] materials)
+        {
+            Vector3[] vertices = sharedMesh?.vertices;
+            Vector3[] normals = sharedMesh?.normals;
+            Vector4[] tangents = sharedMesh?.tangents;
+            Color[] colors = sharedMesh?.colors;
+            Vector2[] uv = sharedMesh?.uv;
+            bool hasColors = colors != null && colors.Length > 2;
+            bool hasUV0 = uv != null || uv.Length > 2;
+
+            // Draw error messages
+            if(sharedMesh == null)
+            {
+                EditorGUILayout.HelpBox(TEXT_WARN_MESH_IS_EMPTY[lang], MessageType.Error);
+                return;
+            }
+
+            if(!sharedMesh.isReadable)
+            {
+                EditorGUILayout.HelpBox(TEXT_WARN_MESH_NOT_READABLE[lang], MessageType.Error);
+                return;
+            }
+
+            if(vertices == null || vertices.Length < 2)
+            {
+                EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_VERT[lang], MessageType.Error);
+                return;
+            }
+
+            if(normals == null && normals.Length < 2)
+            {
+                EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_NORM[lang], MessageType.Error);
+                return;
+            }
+
+            if(tangents == null && tangents.Length < 2)
+            {
+                EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_TANJ[lang], MessageType.Error);
+                return;
+            }
+
+            // Generate empty settings
+            if(!meshSettings.ContainsKey(id)) meshSettings[id] = null;
+            if(meshSettings[id] == null || meshSettings[id].Length != sharedMesh.subMeshCount)
+            {
+                meshSettings[id] = new MeshSettings[sharedMesh.subMeshCount];
+                for(int i = 0; i < sharedMesh.subMeshCount; i++)
+                {
+                    meshSettings[id][i] = new MeshSettings
                     {
-                        meshSettings[i].distanceThreshold = EditorGUILayout.FloatField(TEXT_ITEM_DISTANCE_THRESHOLD[lang], meshSettings[i].distanceThreshold);
-                        meshSettings[i].shrinkTipStrength = EditorGUILayout.FloatField(TEXT_ITEM_SHRINK_TIP[lang], meshSettings[i].shrinkTipStrength);
-                        meshSettings[i].normalMask = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_NORMAL_MASK[lang], meshSettings[i].normalMask, typeof(Texture2D), false);
+                        name = null,
+                        isBakeTarget = false,
+                        bakeMode = BakeMode.Average,
+                        widthBakeMode = WidthBakeMode.Empty,
+                        normalMap = null,
+                        normalMask = null,
+                        widthMask = null,
+                        referenceMesh = null,
+                        distanceThreshold = 0.0f,
+                        shrinkTipStrength = 0.0f
+                    };
+                }
+            }
+
+            // Draw settings
+            for(int i = 0; i < sharedMesh.subMeshCount; i++)
+            {
+                if(string.IsNullOrEmpty(meshSettings[id][i].name))
+                {
+                    meshSettings[id][i].name = i + ": ";
+                    if(i < materials.Length && materials[i] != null && !string.IsNullOrEmpty(materials[i].name))
+                    {
+                        meshSettings[id][i].name += materials[i].name;
                     }
-                    if(meshSettings[i].bakeMode == BakeMode.NormalMap)
+                }
+                DrawMeshSettingsGUI(id, i, hasColors, hasUV0);
+            }
+        }
+
+        private static void DrawMeshSettingsGUI(int id, int i, bool hasColors, bool hasUV0)
+        {
+            meshSettings[id][i].isBakeTarget = EditorGUILayout.ToggleLeft(meshSettings[id][i].name, meshSettings[id][i].isBakeTarget);
+
+            int indentCopy = EditorGUI.indentLevel;
+            EditorGUI.indentLevel = 0;
+            if(meshSettings[id][i].isBakeTarget)
+            {
+                EditorGUILayout.BeginVertical(marginBox);
+                meshSettings[id][i].bakeMode = (BakeMode)EditorGUILayout.Popup(TEXT_ITEM_NORMAL_BAKE_MODE[lang], (int)meshSettings[id][i].bakeMode, TEXT_LABELS_NORMAL_BAKE_MODE[lang]);
+                EditorGUI.indentLevel++;
+                    if(meshSettings[id][i].bakeMode == BakeMode.Average)
                     {
-                        meshSettings[i].normalMap = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_NORMAL_MAP[lang], meshSettings[i].normalMap, typeof(Texture2D), false);
+                        meshSettings[id][i].distanceThreshold = EditorGUILayout.FloatField(TEXT_ITEM_DISTANCE_THRESHOLD[lang], meshSettings[id][i].distanceThreshold);
+                        meshSettings[id][i].shrinkTipStrength = EditorGUILayout.FloatField(TEXT_ITEM_SHRINK_TIP[lang], meshSettings[id][i].shrinkTipStrength);
+                        meshSettings[id][i].normalMask = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_NORMAL_MASK[lang], meshSettings[id][i].normalMask, typeof(Texture2D), false);
+                    }
+                    if(meshSettings[id][i].bakeMode == BakeMode.NormalMap)
+                    {
+                        meshSettings[id][i].normalMap = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_NORMAL_MAP[lang], meshSettings[id][i].normalMap, typeof(Texture2D), false);
                         if(!hasUV0) EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_UV[lang], MessageType.Warning);
                     }
-                    if(meshSettings[i].bakeMode == BakeMode.OtherMesh)
+                    if(meshSettings[id][i].bakeMode == BakeMode.OtherMesh)
                     {
-                        meshSettings[i].mesh = (Mesh)EditorGUILayout.ObjectField(TEXT_ITEM_REFERENCE_MESH[lang], meshSettings[i].mesh, typeof(Mesh), false);
-                        meshSettings[i].shrinkTipStrength = EditorGUILayout.FloatField(TEXT_ITEM_SHRINK_TIP[lang], meshSettings[i].shrinkTipStrength);
-                        meshSettings[i].normalMask = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_NORMAL_MASK[lang], meshSettings[i].normalMask, typeof(Texture2D), false);
+                        meshSettings[id][i].referenceMesh = (Mesh)EditorGUILayout.ObjectField(TEXT_ITEM_REFERENCE_MESH[lang], meshSettings[id][i].referenceMesh, typeof(Mesh), false);
+                        meshSettings[id][i].shrinkTipStrength = EditorGUILayout.FloatField(TEXT_ITEM_SHRINK_TIP[lang], meshSettings[id][i].shrinkTipStrength);
+                        meshSettings[id][i].normalMask = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_NORMAL_MASK[lang], meshSettings[id][i].normalMask, typeof(Texture2D), false);
                     }
-                    if(meshSettings[i].bakeMode == BakeMode.Keep && !hasColors)
+                    if(meshSettings[id][i].bakeMode == BakeMode.Keep && !hasColors)
                     {
                         EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_COLOR[lang], MessageType.Warning);
                     }
                 EditorGUI.indentLevel--;
 
-                meshSettings[i].widthBakeMode = (WidthBakeMode)EditorGUILayout.Popup(TEXT_ITEM_WIDTH_BAKE_MODE[lang], (int)meshSettings[i].widthBakeMode, TEXT_LABELS_WIDTH_BAKE_MODE[lang]);
+                meshSettings[id][i].widthBakeMode = (WidthBakeMode)EditorGUILayout.Popup(TEXT_ITEM_WIDTH_BAKE_MODE[lang], (int)meshSettings[id][i].widthBakeMode, TEXT_LABELS_WIDTH_BAKE_MODE[lang]);
                 EditorGUI.indentLevel++;
-                    if(meshSettings[i].widthBakeMode == WidthBakeMode.Mask)
+                    if(meshSettings[id][i].widthBakeMode == WidthBakeMode.Mask)
                     {
-                        meshSettings[i].widthMask = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_WIDTH_MASK[lang], meshSettings[i].widthMask, typeof(Texture2D), false);
+                        meshSettings[id][i].widthMask = (Texture2D)EditorGUILayout.ObjectField(TEXT_ITEM_WIDTH_MASK[lang], meshSettings[id][i].widthMask, typeof(Texture2D), false);
                         if(!hasUV0) EditorGUILayout.HelpBox(TEXT_WARN_MESH_HAS_NO_UV[lang], MessageType.Warning);
                     }
-                    if((meshSettings[i].widthBakeMode == WidthBakeMode.Red ||
-                        meshSettings[i].widthBakeMode == WidthBakeMode.Green ||
-                        meshSettings[i].widthBakeMode == WidthBakeMode.Blue ||
-                        meshSettings[i].widthBakeMode == WidthBakeMode.Alpha) &&
+                    if((meshSettings[id][i].widthBakeMode == WidthBakeMode.Red ||
+                        meshSettings[id][i].widthBakeMode == WidthBakeMode.Green ||
+                        meshSettings[id][i].widthBakeMode == WidthBakeMode.Blue ||
+                        meshSettings[id][i].widthBakeMode == WidthBakeMode.Alpha) &&
                         !hasColors
                     )
                     {
@@ -300,18 +314,250 @@ namespace lilOutlineUtil
                     }
                 EditorGUI.indentLevel--;
                 EditorGUILayout.EndVertical();
-                EditorGUI.indentLevel--;
+            }
+            EditorGUI.indentLevel = indentCopy;
+        }
+
+        //------------------------------------------------------------------------------------------------------------------------------
+        // 3. Generate the mesh, test it, then save
+        private static int[] GetChildIndices(GameObject root, GameObject child)
+        {
+            var indices = new List<int>();
+            indices.Add(child.transform.GetSiblingIndex());
+            Transform parent = child.transform.parent;
+            while(parent != null && parent != root.transform)
+            {
+                indices.Add(parent.GetSiblingIndex());
+                parent = parent.parent;
+            }
+            return indices.ToArray();
+        }
+
+        private static GameObject GetChild(GameObject root, int[] indices)
+        {
+            Transform current = root.transform;
+            for(int i = indices.Length - 1; i >= 0; i--)
+            {
+                current = current.GetChild(indices[i]);
+                if(current == null) return null;
+            }
+            return current.gameObject;
+        }
+
+        private static GameObject GetChildInstance(GameObject root, GameObject rootInstance, GameObject child)
+        {
+            return GetChild(rootInstance, GetChildIndices(root, child));
+        }
+
+        private static void GenerateMeshes(GameObject bakedAvatar, Component[] skinnedMeshRenderers, Component[] meshRenderers)
+        {
+            if(bakedAvatar == null)
+            {
+                bakedAvatar = Instantiate(avatar);
+                bakedAvatar.name = avatar.name + " (VertexColorBaked)";
+                bakedAvatar.transform.parent = avatar.transform.parent;
+            }
+
+            isCancelled = false;
+            foreach(SkinnedMeshRenderer skinnedMeshRenderer in skinnedMeshRenderers)
+            {
+                GameObject child = GetChildInstance(avatar, bakedAvatar, skinnedMeshRenderer.gameObject);
+                if(child == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Child is not found");
+                    continue;
+                }
+                SkinnedMeshRenderer bakedSkinnedMeshRenderer = child.GetComponent<SkinnedMeshRenderer>();
+                if(bakedSkinnedMeshRenderer == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Component is not found");
+                    continue;
+                }
+
+                int id = skinnedMeshRenderer.gameObject.GetInstanceID();
+                Mesh sharedMesh = skinnedMeshRenderer.sharedMesh;
+                Mesh bakedMesh = bakedSkinnedMeshRenderer.sharedMesh;
+                if(bakedMesh == null || !bakedMesh.name.Contains("(Clone)"))
+                {
+                    bakedMesh = Instantiate(sharedMesh);
+                }
+                BakeVertexColors(ref bakedMesh, sharedMesh, id);
+                if(isCancelled) break;
+
+                if(bakedMesh == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Mesh is not found");
+                    continue;
+                }
+                bakedSkinnedMeshRenderer.sharedMesh = bakedMesh;
+            }
+
+            foreach(MeshRenderer meshRenderer in meshRenderers)
+            {
+                MeshFilter meshFilter = meshRenderer.gameObject.GetComponent<MeshFilter>();
+                if(meshFilter == null)
+                {
+                    continue;
+                }
+                GameObject child = GetChildInstance(avatar, bakedAvatar, meshRenderer.gameObject);
+                if(child == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Child is not found");
+                    continue;
+                }
+                MeshFilter bakedMeshFilter = child.GetComponent<MeshFilter>();
+                if(bakedMeshFilter == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Component is not found");
+                    continue;
+                }
+
+                int id = meshRenderer.gameObject.GetInstanceID();
+                Mesh sharedMesh = meshFilter.sharedMesh;
+                Mesh bakedMesh = bakedMeshFilter.sharedMesh;
+                if(bakedMesh == null || !bakedMesh.name.Contains("(Clone)"))
+                {
+                    bakedMesh = Instantiate(sharedMesh);
+                }
+                BakeVertexColors(ref bakedMesh, sharedMesh, id);
+                if(isCancelled) break;
+
+                if(bakedMesh == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Mesh is not found");
+                    continue;
+                }
+                bakedMeshFilter.sharedMesh = bakedMesh;
+            }
+            if(!isCancelled) EditorUtility.DisplayDialog(TEXT_WINDOW_NAME, "Complete!", "OK");
+        }
+
+        private static void GetBakedMeshes(GameObject bakedAvatar, Component[] skinnedMeshRenderers, Component[] meshRenderers)
+        {
+            foreach(SkinnedMeshRenderer skinnedMeshRenderer in skinnedMeshRenderers)
+            {
+                Mesh sharedMesh = skinnedMeshRenderer.sharedMesh;
+                if(sharedMesh == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Mesh is not found");
+                    continue;
+                }
+                GameObject child = GetChildInstance(avatar, bakedAvatar, skinnedMeshRenderer.gameObject);
+                if(child == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Child is not found");
+                    continue;
+                }
+                SkinnedMeshRenderer bakedSkinnedMeshRenderer = child.GetComponent<SkinnedMeshRenderer>();
+                if(bakedSkinnedMeshRenderer == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Component is not found");
+                    continue;
+                }
+                bakedMeshes[sharedMesh] = bakedSkinnedMeshRenderer.sharedMesh;
+            }
+
+            foreach(MeshRenderer meshRenderer in meshRenderers)
+            {
+                MeshFilter meshFilter = meshRenderer.gameObject.GetComponent<MeshFilter>();
+                if(meshFilter == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Component is not found");
+                    continue;
+                }
+                Mesh sharedMesh = meshFilter.sharedMesh;
+                if(sharedMesh == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Mesh is not found");
+                    continue;
+                }
+                GameObject child = GetChildInstance(avatar, bakedAvatar, meshRenderer.gameObject);
+                if(child == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Child is not found");
+                    continue;
+                }
+                MeshFilter bakedMeshFilter = child.GetComponent<MeshFilter>();
+                if(bakedMeshFilter == null)
+                {
+                    Debug.LogWarning("[lilOutlineUtil] Component is not found");
+                    continue;
+                }
+                bakedMeshes[sharedMesh] = bakedMeshFilter.sharedMesh;
+            }
+        }
+
+        private static void SaveMeshes()
+        {
+            foreach(KeyValuePair<Mesh, Mesh> bakedMesh in bakedMeshes)
+            {
+                if(bakedMesh.Value == null || string.IsNullOrEmpty(bakedMesh.Value.name)) continue;
+
+                string path = AssetDatabase.GetAssetPath(bakedMesh.Value);
+                if(string.IsNullOrEmpty(path))
+                {
+                    path = AssetDatabase.GetAssetPath(bakedMesh.Key);
+                    if(string.IsNullOrEmpty(path) || !path.StartsWith("Assets/"))
+                    {
+                        path = "Assets/BakedMeshes/" + bakedMesh.Value.name + ".asset";
+                    }
+                    else
+                    {
+                        path = Path.GetDirectoryName(path) + "/BakedMeshes/" + bakedMesh.Value.name + ".asset";
+                    }
+                    path = GetUniqueName(path);
+                }
+
+                string saveDirectory = Path.GetDirectoryName(path);
+                if(!Directory.Exists(saveDirectory))
+                {
+                    Directory.CreateDirectory(saveDirectory);
+                }
+                if(!File.Exists(path))
+                {
+                    Debug.Log("[lilOutlineUtil] Create asset to: " + path);
+                    AssetDatabase.CreateAsset(bakedMesh.Value, path);
+                }
+                else
+                {
+                    Debug.Log("[lilOutlineUtil] Overwrite mesh to: " + path);
+                }
+            }
+            AssetDatabase.SaveAssets();
+            EditorUtility.DisplayDialog(TEXT_WINDOW_NAME, "Complete!", "OK");
+        }
+
+        private static string GetUniqueName(string path)
+        {
+            if(!File.Exists(path)) return path;
+
+            string baseName = Path.GetDirectoryName(path) + "/" + Path.GetFileNameWithoutExtension(path);
+            string outPath;
+            int i = 1;
+            while(true)
+            {
+                outPath = baseName + " " + i.ToString() + ".asset";
+                if(!File.Exists(outPath)) return outPath;
+                i++;
             }
         }
 
         //------------------------------------------------------------------------------------------------------------------------------
         // Mesh Generator
-        private static void BakeVertexColors(Mesh sharedMesh, bool isSkinned)
+        private static void BakeVertexColors(ref Mesh mesh, Mesh sharedMesh, int id)
         {
-            Mesh mesh = Instantiate(sharedMesh);
+            if(isCancelled || sharedMesh == null || !sharedMesh.isReadable) return;
             Vector3[] vertices = sharedMesh.vertices;
             Vector3[] normals = sharedMesh.normals;
             Vector4[] tangents = sharedMesh.tangents;
+
+            if(vertices == null || vertices.Length < 2 ||
+               normals == null && normals.Length < 2 ||
+               tangents == null && tangents.Length < 2)
+            {
+                return;
+            }
+
             Color[] colors = sharedMesh.colors;
             Vector2[] uv = sharedMesh.uv;
             bool hasColors = colors != null && colors.Length > 2;
@@ -319,16 +565,14 @@ namespace lilOutlineUtil
             Color[] outColors = hasColors ? (Color[])colors.Clone() : Enumerable.Repeat(Color.white, vertices.Length).ToArray();
 
             isCancelled = false;
-            System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
-            stopwatch.Start();
             for(int mi = 0; mi < sharedMesh.subMeshCount; mi++)
             {
-                if(!meshSettings[mi].isBakeTarget) continue;
-                FixInvalidSettings(mi, hasColors, hasUV0);
+                if(!meshSettings[id][mi].isBakeTarget) continue;
+                meshSettings[id][mi] = FixInvalidSettings(meshSettings[id][mi], hasColors, hasUV0);
 
                 // Get readable texture
-                Texture2D normalMap = meshSettings[mi].normalMap;
-                if(meshSettings[mi].bakeMode == BakeMode.NormalMap)
+                Texture2D normalMap = meshSettings[id][mi].normalMap;
+                if(meshSettings[id][mi].bakeMode == BakeMode.NormalMap)
                 {
                     GetReadableTexture(ref normalMap);
                 }
@@ -337,8 +581,8 @@ namespace lilOutlineUtil
                     normalMap = null;
                 }
 
-                Texture2D widthMask = meshSettings[mi].widthMask;
-                if(meshSettings[mi].widthBakeMode == WidthBakeMode.Mask)
+                Texture2D widthMask = meshSettings[id][mi].widthMask;
+                if(meshSettings[id][mi].widthBakeMode == WidthBakeMode.Mask)
                 {
                     GetReadableTexture(ref widthMask);
                 }
@@ -347,8 +591,8 @@ namespace lilOutlineUtil
                     widthMask = null;
                 }
 
-                Texture2D normalMask = meshSettings[mi].normalMask;
-                if(normalMask != null && hasUV0 && (meshSettings[mi].bakeMode == BakeMode.Average || meshSettings[mi].bakeMode == BakeMode.OtherMesh))
+                Texture2D normalMask = meshSettings[id][mi].normalMask;
+                if(normalMask != null && hasUV0 && (meshSettings[id][mi].bakeMode == BakeMode.Average || meshSettings[id][mi].bakeMode == BakeMode.OtherMesh))
                 {
                     GetReadableTexture(ref normalMask);
                 }
@@ -359,81 +603,61 @@ namespace lilOutlineUtil
 
                 int[] sharedIndices = GetOptIndices(sharedMesh, mi);
 
-                switch(meshSettings[mi].bakeMode)
+                switch(meshSettings[id][mi].bakeMode)
                 {
                     case BakeMode.Average:
                         if(normalMask != null)
                         {
-                            BakeNormalAverage(ref outColors, sharedIndices, mi, vertices, normals, tangents, colors, uv, widthMask, normalMask, true);
+                            BakeNormalAverage(ref outColors, sharedIndices, meshSettings[id][mi], vertices, normals, tangents, colors, uv, widthMask, normalMask, true);
                         }
                         else
                         {
-                            BakeNormalAverage(ref outColors, sharedIndices, mi, vertices, normals, tangents, colors, uv, widthMask, normalMask, false);
+                            BakeNormalAverage(ref outColors, sharedIndices, meshSettings[id][mi], vertices, normals, tangents, colors, uv, widthMask, normalMask, false);
                         }
                         break;
                     case BakeMode.NormalMap:
-                        BakeNormalMap(ref outColors, sharedIndices, mi, colors, uv, widthMask, normalMap);
+                        BakeNormalMap(ref outColors, sharedIndices, meshSettings[id][mi], colors, uv, widthMask, normalMap);
                         break;
                     case BakeMode.OtherMesh:
                         if(normalMask != null)
                         {
-                            BakeNormalMesh(ref outColors, sharedIndices, mi, vertices, normals, tangents, colors, uv, widthMask, normalMask, true);
+                            BakeNormalMesh(ref outColors, sharedIndices, meshSettings[id][mi], vertices, normals, tangents, colors, uv, widthMask, normalMask, true);
                         }
                         else
                         {
-                            BakeNormalMesh(ref outColors, sharedIndices, mi, vertices, normals, tangents, colors, uv, widthMask, normalMask, false);
+                            BakeNormalMesh(ref outColors, sharedIndices, meshSettings[id][mi], vertices, normals, tangents, colors, uv, widthMask, normalMask, false);
                         }
                         break;
                     case BakeMode.Empty:
-                        BakeNormalEmpty(ref outColors, sharedIndices, mi, colors, uv, widthMask);
+                        BakeNormalEmpty(ref outColors, sharedIndices, meshSettings[id][mi], colors, uv, widthMask);
                         break;
                     case BakeMode.Keep:
-                        BakeNormalKeep(ref outColors, sharedIndices, mi, colors, uv, widthMask);
+                        BakeNormalKeep(ref outColors, sharedIndices, meshSettings[id][mi], colors, uv, widthMask);
                         break;
                     default:
-                        BakeNormalEmpty(ref outColors, sharedIndices, mi, colors, uv, widthMask);
+                        BakeNormalEmpty(ref outColors, sharedIndices, meshSettings[id][mi], colors, uv, widthMask);
                         break;
                 }
                 EditorUtility.ClearProgressBar();
                 if(isCancelled) return;
             }
-            stopwatch.Stop();
-            Debug.Log(stopwatch.ElapsedMilliseconds + "ms");
 
             FixIllegalDatas(ref outColors);
             mesh.SetColors(outColors);
-
-            GameObject bakedObject = FindBakedObject();
-            if(bakedObject == null)
-            {
-                bakedObject = Instantiate(gameObject);
-                bakedObject.name = gameObject.name + " (VertexColorBaked)";
-                bakedObject.transform.parent = gameObject.transform.parent;
-            }
-
-            if(isSkinned)
-            {
-                SkinnedMeshRenderer bakedSkinnedMeshRenderer = bakedObject.GetComponent<SkinnedMeshRenderer>();
-                bakedSkinnedMeshRenderer.sharedMesh = mesh;
-            }
-            else
-            {
-                MeshFilter bakedMeshFilter = bakedObject.GetComponent<MeshFilter>();
-                bakedMeshFilter.mesh = mesh;
-            }
+            EditorUtility.SetDirty(mesh);
         }
 
         //------------------------------------------------------------------------------------------------------------------------------
         // Bake normal to color
-        private static void BakeNormalAverage(ref Color[] outColors, int[] sharedIndices, int mi, Vector3[] vertices, Vector3[] normals, Vector4[] tangents, Color[] colors, Vector2[] uv, Texture2D widthMask, Texture2D normalMask, bool useNormalMask)
+        private static void BakeNormalAverage(ref Color[] outColors, int[] sharedIndices, MeshSettings settings, Vector3[] vertices, Vector3[] normals, Vector4[] tangents, Color[] colors, Vector2[] uv, Texture2D widthMask, Texture2D normalMask, bool useNormalMask)
         {
-            var normalAverages = NormalGatherer.GetNormalAverages(sharedIndices, vertices, normals, meshSettings[mi].distanceThreshold);
-            string message = "Run bake in " + meshSettings[mi].name;
+            var normalAverages = NormalGatherer.GetNormalAverages(sharedIndices, vertices, normals, settings.distanceThreshold);
+            string message = "Run bake in " + settings.name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
                 int index = sharedIndices[i];
-                float width = GetWidth(mi, colors, uv, index, widthMask);
+                float width = GetWidth(settings, colors, uv, index, widthMask);
                 Vector3 normal = normals[index];
                 Vector4 tangent = tangents[index];
                 Vector3 bitangent = Vector3.Cross(normal, tangent) * tangent.w;
@@ -446,7 +670,7 @@ namespace lilOutlineUtil
                     continue;
                 }
                 Vector3 normalAverage = NormalGatherer.GetClosestNormal(normalAverages, vertices[index]);
-                if(meshSettings[mi].shrinkTipStrength > 0) width *= Mathf.Pow(Mathf.Clamp01(Vector3.Dot(normal,normalAverage)), meshSettings[mi].shrinkTipStrength);
+                if(settings.shrinkTipStrength > 0) width *= Mathf.Pow(Mathf.Clamp01(Vector3.Dot(normal,normalAverage)), settings.shrinkTipStrength);
                 outColors[index].r = Vector3.Dot(normalAverage, tangent) * 0.5f + 0.5f;
                 outColors[index].g = Vector3.Dot(normalAverage, bitangent) * 0.5f + 0.5f;
                 outColors[index].b = Vector3.Dot(normalAverage, normal) * 0.5f + 0.5f;
@@ -455,15 +679,17 @@ namespace lilOutlineUtil
             }
         }
 
-        private static void BakeNormalMesh(ref Color[] outColors, int[] sharedIndices, int mi, Vector3[] vertices, Vector3[] normals, Vector4[] tangents, Color[] colors, Vector2[] uv, Texture2D widthMask, Texture2D normalMask, bool useNormalMask)
+        private static void BakeNormalMesh(ref Color[] outColors, int[] sharedIndices, MeshSettings settings, Vector3[] vertices, Vector3[] normals, Vector4[] tangents, Color[] colors, Vector2[] uv, Texture2D widthMask, Texture2D normalMask, bool useNormalMask)
         {
-            var normalOriginal = NormalGatherer.GetNormalAveragesFast(sharedIndices, vertices, normals);
-            string message = "Run bake in " + meshSettings[mi].name;
+            Vector3[] refVertices = settings.referenceMesh.vertices;
+            Vector3[] refNormals = settings.referenceMesh.normals;
+            var normalOriginal = NormalGatherer.GetNormalAveragesFast(sharedIndices, refVertices, refNormals);
+            string message = "Run bake in " + settings.name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
                 int index = sharedIndices[i];
-                float width = GetWidth(mi, colors, uv, index, widthMask);
+                float width = GetWidth(settings, colors, uv, index, widthMask);
                 Vector3 normal = normals[index];
                 Vector4 tangent = tangents[index];
                 Vector3 bitangent = Vector3.Cross(normal, tangent) * (tangent.w >= 0 ? 1 : -1);
@@ -476,7 +702,7 @@ namespace lilOutlineUtil
                     continue;
                 }
                 Vector3 normalAverage = NormalGatherer.GetClosestNormal(normalOriginal, vertices[index]);
-                if(meshSettings[mi].shrinkTipStrength > 0) width *= Mathf.Pow(Mathf.Clamp01(Vector3.Dot(normal,normalAverage)), meshSettings[mi].shrinkTipStrength);
+                if(settings.shrinkTipStrength > 0) width *= Mathf.Pow(Mathf.Clamp01(Vector3.Dot(normal,normalAverage)), settings.shrinkTipStrength);
                 outColors[index].r = Vector3.Dot(normalAverage, tangent) * 0.5f + 0.5f;
                 outColors[index].g = Vector3.Dot(normalAverage, bitangent) * 0.5f + 0.5f;
                 outColors[index].b = Vector3.Dot(normalAverage, normal) * 0.5f + 0.5f;
@@ -485,9 +711,9 @@ namespace lilOutlineUtil
             }
         }
 
-        private static void BakeNormalMap(ref Color[] outColors, int[] sharedIndices, int mi, Color[] colors, Vector2[] uv, Texture2D widthMask, Texture2D normalMap)
+        private static void BakeNormalMap(ref Color[] outColors, int[] sharedIndices, MeshSettings settings, Color[] colors, Vector2[] uv, Texture2D widthMask, Texture2D normalMap)
         {
-            string message = "Run bake in " + meshSettings[mi].name;
+            string message = "Run bake in " + settings.name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
@@ -496,14 +722,14 @@ namespace lilOutlineUtil
                 outColors[index].r = normalMapColor.r;
                 outColors[index].g = normalMapColor.g;
                 outColors[index].b = normalMapColor.b;
-                outColors[index].a = GetWidth(mi, colors, uv, index, widthMask);
+                outColors[index].a = GetWidth(settings, colors, uv, index, widthMask);
                 if(DrawProgress(message, i, (float)i / (float)sharedIndices.Length)) return;
             }
         }
 
-        private static void BakeNormalEmpty(ref Color[] outColors, int[] sharedIndices, int mi, Color[] colors, Vector2[] uv, Texture2D widthMask)
+        private static void BakeNormalEmpty(ref Color[] outColors, int[] sharedIndices, MeshSettings settings, Color[] colors, Vector2[] uv, Texture2D widthMask)
         {
-            string message = "Run bake in " + meshSettings[mi].name;
+            string message = "Run bake in " + settings.name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
@@ -511,26 +737,26 @@ namespace lilOutlineUtil
                 outColors[index].r = 0.5f;
                 outColors[index].g = 0.5f;
                 outColors[index].b = 1.0f;
-                outColors[index].a = GetWidth(mi, colors, uv, index, widthMask);
+                outColors[index].a = GetWidth(settings, colors, uv, index, widthMask);
                 if(DrawProgress(message, i, (float)i / (float)sharedIndices.Length)) return;
             }
         }
 
-        private static void BakeNormalKeep(ref Color[] outColors, int[] sharedIndices, int mi, Color[] colors, Vector2[] uv, Texture2D widthMask)
+        private static void BakeNormalKeep(ref Color[] outColors, int[] sharedIndices, MeshSettings settings, Color[] colors, Vector2[] uv, Texture2D widthMask)
         {
-            string message = "Run bake in " + meshSettings[mi].name;
+            string message = "Run bake in " + settings.name;
 
             for(int i = 0; i < sharedIndices.Length; ++i)
             {
                 int index = sharedIndices[i];
-                outColors[index].a = GetWidth(mi, colors, uv, index, widthMask);
+                outColors[index].a = GetWidth(settings, colors, uv, index, widthMask);
                 if(DrawProgress(message, i, (float)i / (float)sharedIndices.Length)) return;
             }
         }
 
-        private static float GetWidth(int mi, Color[] colors, Vector2[] uv, int index, Texture2D widthMask)
+        private static float GetWidth(MeshSettings settings, Color[] colors, Vector2[] uv, int index, Texture2D widthMask)
         {
-            switch(meshSettings[mi].widthBakeMode)
+            switch(settings.widthBakeMode)
             {
                 case WidthBakeMode.Mask:
                     if(widthMask == null) return 1.0f;
@@ -591,21 +817,21 @@ namespace lilOutlineUtil
             }
         }
 
-        private static GameObject FindBakedObject()
+        private static GameObject FindBakedAvatar()
         {
-            if(gameObject.transform.parent != null)
+            if(avatar.transform.parent != null)
             {
-                for(int i = 0; i < gameObject.transform.parent.childCount; i++)
+                for(int i = 0; i < avatar.transform.parent.childCount; i++)
                 {
-                    GameObject childObject = gameObject.transform.parent.GetChild(i).gameObject;
-                    if(childObject.name.Contains(gameObject.name + " (VertexColorBaked)"))
+                    GameObject childObject = avatar.transform.parent.GetChild(i).gameObject;
+                    if(childObject.name.Contains(avatar.name + " (VertexColorBaked)"))
                     {
                         return childObject;
                     }
                 }
             }
 
-            return GameObject.Find(gameObject.name + " (VertexColorBaked)");
+            return GameObject.Find(avatar.name + " (VertexColorBaked)");
         }
 
         private static void FixIllegalDatas(ref Color[] outColors)
@@ -627,33 +853,35 @@ namespace lilOutlineUtil
             }
         }
 
-        private static void FixInvalidSettings(int mi, bool hasColors, bool hasUV0)
+        private static MeshSettings FixInvalidSettings(MeshSettings settings, bool hasColors, bool hasUV0)
         {
-            if(meshSettings[mi].bakeMode == BakeMode.NormalMap && (!hasUV0 || meshSettings[mi].normalMap == null))
+            if(settings.bakeMode == BakeMode.NormalMap && (!hasUV0 || settings.normalMap == null))
             {
-                meshSettings[mi].bakeMode = BakeMode.Empty;
+                settings.bakeMode = BakeMode.Empty;
             }
-            if(meshSettings[mi].bakeMode == BakeMode.NormalMap && meshSettings[mi].mesh == null)
+            if(settings.bakeMode == BakeMode.NormalMap && settings.referenceMesh == null)
             {
-                meshSettings[mi].bakeMode = BakeMode.Empty;
+                settings.bakeMode = BakeMode.Empty;
             }
-            if(meshSettings[mi].bakeMode == BakeMode.Keep && !hasColors)
+            if(settings.bakeMode == BakeMode.Keep && !hasColors)
             {
-                meshSettings[mi].bakeMode = BakeMode.Empty;
+                settings.bakeMode = BakeMode.Empty;
             }
-            if(meshSettings[mi].widthBakeMode == WidthBakeMode.Mask && (!hasUV0 || meshSettings[mi].widthMask == null))
+            if(settings.widthBakeMode == WidthBakeMode.Mask && (!hasUV0 || settings.widthMask == null))
             {
-                meshSettings[mi].widthBakeMode = WidthBakeMode.Empty;
+                settings.widthBakeMode = WidthBakeMode.Empty;
             }
-            if((meshSettings[mi].widthBakeMode == WidthBakeMode.Red ||
-                meshSettings[mi].widthBakeMode == WidthBakeMode.Green ||
-                meshSettings[mi].widthBakeMode == WidthBakeMode.Blue ||
-                meshSettings[mi].widthBakeMode == WidthBakeMode.Alpha) &&
+            if((settings.widthBakeMode == WidthBakeMode.Red ||
+                settings.widthBakeMode == WidthBakeMode.Green ||
+                settings.widthBakeMode == WidthBakeMode.Blue ||
+                settings.widthBakeMode == WidthBakeMode.Alpha) &&
                 !hasColors
             )
             {
-                meshSettings[mi].widthBakeMode = WidthBakeMode.Empty;
+                settings.widthBakeMode = WidthBakeMode.Empty;
             }
+
+            return settings;
         }
 
         //------------------------------------------------------------------------------------------------------------------------------
@@ -662,14 +890,10 @@ namespace lilOutlineUtil
 
         private static readonly string[] TEXT_LANGUAGES                 = new[] {"English", "Japanese"};
 
-        private static readonly string[] TEXT_STEP_SELECT_MESH          = new[] {"1. Select the mesh",                          "1. メッシュを選択"};
+        private static readonly string[] TEXT_STEP_SELECT_AVATAR        = new[] {"1. Select the avatar",                        "1. アバターを選択"};
         private static readonly string[] TEXT_STEP_SELECT_SUBMESH       = new[] {"2. Select the modify target",                 "2. 編集対象を選択"};
         private static readonly string[] TEXT_STEP_GENERATE_AND_SAVE    = new[] {"3. Generate the mesh, test it, then save",    "3. メッシュを生成・テスト・保存"};
 
-        private static readonly string[] TEXT_WARN_OBJ_NOT_HAVE_MESH    = new[] {
-            "The selected GameObject does not have a \"SkinnedMeshRenderer\" or \"MeshRenderer\".",
-            "選択したGameObjectは\"SkinnedMeshRenderer\"または\"MeshRenderer\"を持っていません。"
-        };
         private static readonly string[] TEXT_WARN_SELECT_FROM_SCENE    = new[] {"Please select from the scene (hierarchy)",            "シーン（ヒエラルキー）から選択してください"};
         private static readonly string[] TEXT_WARN_MESH_NOT_READABLE    = new[] {"The selected mesh is not set to \"Read/Write\" on.",  "選択されたメッシュは\"Read/Write\"がオンになっていません。"};
         private static readonly string[] TEXT_WARN_MESH_IS_EMPTY        = new[] {"The selected mesh is empty!",         "選択したメッシュは空です"};
@@ -680,7 +904,7 @@ namespace lilOutlineUtil
         private static readonly string[] TEXT_WARN_MESH_HAS_NO_COLOR    = new[] {"The setting is ignored because there is no vertex color.",    "頂点カラーが存在しないため設定が無視されます。"};
         private static readonly string[] TEXT_WARN_MESH_NOT_SAVED       = new[] {"Generated mesh is not saved!",        "生成されたメッシュが保存されていません。"};
 
-        private static readonly string[] TEXT_ITEM_DD_MESH              = new[] {"Mesh (D&D from scene)",   "メッシュ (シーンからD&D)"};
+        private static readonly string[] TEXT_ITEM_DD_AVATAR            = new[] {"Avatar (D&D from scene)", "アバター (シーンからD&D)"};
         private static readonly string[] TEXT_ITEM_NORMAL_BAKE_MODE     = new[] {"Bake Mode (Normal)",      "ベイクモード（方向）"};
         private static readonly string[] TEXT_ITEM_DISTANCE_THRESHOLD   = new[] {"Distance Threshold",      "同一頂点とみなす距離"};
         private static readonly string[] TEXT_ITEM_NORMAL_MAP           = new[] {"Normal map",              "ノーマルマップ"};
@@ -771,5 +995,6 @@ namespace lilOutlineUtil
             return closestNormal;
         }
     }
+
 }
 #endif
