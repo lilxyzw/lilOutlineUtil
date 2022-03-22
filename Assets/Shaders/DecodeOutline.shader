@@ -100,7 +100,7 @@ Shader "Unlit/DecodeOutline"
             // object space
             float3 CalcOutlineVectorOS(float4 color, float3 normalOS, float4 tangentOS)
             {
-                float3 bitangentOS = cross(normalOS, tangentOS.xyz) * tangentOS.w;
+                float3 bitangentOS = normalize(cross(normalOS, tangentOS.xyz)) * (tangentOS.w * length(normalOS));
                 float3 outlineVectorTS = color.rgb * 2.0 - 1.0;
                 float3 outlineVector = outlineVectorTS.x * tangentOS.xyz + outlineVectorTS.y * bitangentOS + outlineVectorTS.z * normalOS;
                 return outlineVector * color.a;
