@@ -2,7 +2,7 @@
 
 ## 日本語
  
-[ダウンロード](#)
+[ダウンロード](https://github.com/lilxyzw/lilOutlineUtil/releases)
 1. unitypackageをUnityウィンドウにドラッグ＆ドロップでインポート
 2. マテリアルの輪郭線（アウトライン）の設定で頂点カラーを使うようにする
 3. `Window - _lil - Outline Util`からウィンドウを開く
