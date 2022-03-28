@@ -1,5 +1,3 @@
-以下は開発途中なので変更される可能性があります。
-
 ## 日本語
  
 [ダウンロード](https://github.com/lilxyzw/lilOutlineUtil/releases)
